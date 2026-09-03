@@ -418,6 +418,17 @@ function FormModal({ onClose }) {
     return () => window.removeEventListener('keydown', fn);
   }, [onClose]);
 
+  /* El foco se pone a mano: el atributo autoFocus falla en Safari cuando el
+     campo se monta dentro de un contenedor con backdrop-filter.
+     OJO: este hook va AQUI, antes de los return condicionales de abajo.
+     Si se coloca despues, en el render de exito React ve menos hooks que en
+     el anterior, lanza error fatal y la pagina se queda en blanco. */
+  const campoRef = useRef(null);
+  useEffect(() => {
+    const t = setTimeout(() => { if (campoRef.current) campoRef.current.focus(); }, 60);
+    return () => clearTimeout(t);
+  }, [paso]);
+
   const canContinue = () => {
     if (paso === 1) return form.nombre.trim().length > 1;
     if (paso === 2) return true;   // opcional — se puede omitir
@@ -555,14 +566,6 @@ function FormModal({ onClose }) {
   );
 
   /* ── Pasos ── */
-  /* El foco se pone a mano: el atributo autoFocus falla en Safari cuando el
-     campo se monta dentro de un contenedor con backdrop-filter */
-  const campoRef = useRef(null);
-  useEffect(() => {
-    const t = setTimeout(() => { if (campoRef.current) campoRef.current.focus(); }, 60);
-    return () => clearTimeout(t);
-  }, [paso]);
-
   /* Avisos en vivo del paso 3 — solo cuando ya escribio algo, para no
      regañar a alguien que apenas empieza a teclear */
   const digitosTel  = form.telefono.replace(/\D/g, '').length;
