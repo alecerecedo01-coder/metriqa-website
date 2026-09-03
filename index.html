@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>METRIQA — El punto exacto entre criterio y dato</title>
+<title>METRIQA — Sistemas a la medida para tu negocio</title>
+<meta name="description" content="Construimos sitios web, sistemas administrativos, sistemas operativos y software a la medida. Investigamos, planeamos, diseñamos la estrategia y ejecutamos. Monterrey, México." />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -204,30 +205,93 @@ function initThreeSphere(container, opts) {
 
 /*
   ══════════════════════════════════════════════════════
-  PARA CONECTAR CON GOOGLE SHEETS:
-  1. Abre el Google Sheet "METRIQA — Contactos Web"
-     https://docs.google.com/spreadsheets/d/1lWvRL9reUNdPFo7WA2l3TAb18zLU2iDpqHtnJY79SHg
-  2. Ve a Extensiones → Apps Script
-  3. Borra todo y pega este código:
+  BACKEND DEL FORMULARIO — Google Apps Script
+  El código está en el archivo `apps-script.gs` de esta carpeta.
+  Escribe cada envío en el Sheet Y avisa por correo a contacto@metriqa.com.mx.
 
-  const SHEET_ID = '13pHVanCmX9nLhKd0jiywLXnAnYxfckFOfy7AD98ffmk';
-  function doPost(e) {
-    const data = JSON.parse(e.postData.contents);
-    const sheet = SpreadsheetApp.openById(SHEET_ID).getActiveSheet();
-    sheet.appendRow([new Date().toLocaleString('es-MX'),
-      data.nombre, data.empresa, data.email, data.telefono, data.servicio, data.mensaje]);
-    return ContentService.createTextOutput(JSON.stringify({status:'ok'}))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-  function doGet() { return ContentService.createTextOutput('OK'); }
-
-  4. Implementar → Nueva implementación → Aplicación web
-     · Ejecutar como: Yo
-     · Quién tiene acceso: Cualquier usuario
-  5. Copia la URL y reemplaza la variable APPS_SCRIPT_URL de abajo.
+  Para actualizarlo:
+  1. Sheet "METRIQA — Contactos Web" → Extensiones → Apps Script
+     https://docs.google.com/spreadsheets/d/13pHVanCmX9nLhKd0jiywLXnAnYxfckFOfy7AD98ffmk/edit
+  2. Borra todo y pega el contenido de `apps-script.gs`
+  3. Implementar → Gestionar implementaciones → editar (lápiz)
+     → Versión: "Nueva versión" → Implementar
+     (Ejecutar como: Yo · Quién tiene acceso: Cualquier usuario)
+  4. La URL NO cambia, así que APPS_SCRIPT_URL de abajo se queda igual.
+  5. La primera vez pedirá autorizar el permiso de enviar correos: acéptalo.
   ══════════════════════════════════════════════════════
 */
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz4QczBspnFNhORM0_0Kafg-WRHOh0nTdW5ok9ZUXTEd09HMWN7cb1cN7VVEXnGg0vpxA/exec';
+
+/* ─── Validacion y limpieza de datos ─── */
+/* Regex realista: usuario@dominio.tld, con TLD de 2+ letras y sin
+   puntos dobles ni al inicio/final. Rechaza "a@b.c" y "ale@gmial" */
+const RE_CORREO = /^[A-Za-z0-9](?:[A-Za-z0-9._%+-]*[A-Za-z0-9])?@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$/;
+
+/* Dominios que la gente escribe mal todo el tiempo */
+const DOMINIOS_MAL = {
+  'gmial.com':'gmail.com',   'gmai.com':'gmail.com',    'gmail.co':'gmail.com',
+  'gmil.com':'gmail.com',    'gmaill.com':'gmail.com',  'gamil.com':'gmail.com',
+  'gmail.con':'gmail.com',   'gmail.om':'gmail.com',    'hotmial.com':'hotmail.com',
+  'hotmai.com':'hotmail.com','hotmail.co':'hotmail.com','hotmail.con':'hotmail.com',
+  'hotmaill.com':'hotmail.com','outlok.com':'outlook.com','outlook.co':'outlook.com',
+  'yahooo.com':'yahoo.com',  'yaho.com':'yahoo.com',    'yahoo.co':'yahoo.com',
+  'icloud.co':'icloud.com',  'live.co':'live.com',
+};
+
+/* Correo: siempre en minusculas. Los dominios no distinguen mayusculas
+   y asi no entran "Ale@Gmail.com" y "ale@gmail.com" como dos personas. */
+const limpiaCorreo = v => String(v || '').trim().toLowerCase().replace(/\s/g, '');
+
+/* Nombres y empresas: Primera Letra De Cada Palabra En Mayuscula,
+   para que no lleguen "ALEJANDRA CERECEDO" ni "alejandra cerecedo" */
+const MINUSCULAS = ['de','del','la','las','los','y','e','en','el','a','al','por','para','con'];
+const capitaliza = v => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase()
+  .split(' ')
+  .map((w, i) => {
+    if (i > 0 && MINUSCULAS.includes(w)) return w;
+    if (/^(s\.a\.|s\.a\.p\.i\.|s\.c\.|sa|sapi|sc|srl|sas)$/.test(w)) return w.toUpperCase();
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  })
+  .join(' ');
+
+/* Sugiere la correccion si el dominio esta mal escrito */
+const sugiereCorreo = v => {
+  const c = limpiaCorreo(v);
+  const i = c.lastIndexOf('@');
+  if (i < 0) return '';
+  const dom = c.slice(i + 1);
+  return DOMINIOS_MAL[dom] ? c.slice(0, i + 1) + DOMINIOS_MAL[dom] : '';
+};
+
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyvIXd3tL3LvD0fR4078lA8IUru5WWTGbRLziKa-zIU8ivNmuUBGeUdUx6vtaUyrcdyWw/exec';
+
+/* ─── WhatsApp ─── */
+const WA_TEL     = '+52 56 6185 40 16';
+const WA_MENSAJE = 'Hola METRIQA, vi su sitio web y estoy interesado en desarrollar un sistema para mi empresa. Me gustaría agendar el diagnóstico sin costo.';
+const WA_LINK    = `https://wa.me/${WA_TEL.replace(/\D/g,'')}?text=${encodeURIComponent(WA_MENSAJE)}`;
+
+/* ─── Instagram ─── */
+const IG_USER = 'metriqa_consulting';
+const IG_LINK = `https://www.instagram.com/${IG_USER}/`;
+
+/* ─── Correo ─── */
+const EMAIL        = 'contacto@metriqa.com.mx';
+const EMAIL_ASUNTO = 'Estoy interesado en desarrollar un sistema';
+const EMAIL_CUERPO = [
+  'Hola METRIQA,',
+  '',
+  'Vi su sitio web y me interesa desarrollar un sistema para mi empresa.',
+  'Me gustaría agendar el diagnóstico sin costo de 30 minutos.',
+  '',
+  'Estos son mis datos:',
+  '',
+  'Nombre:',
+  'Empresa:',
+  'WhatsApp:',
+  'Lo que necesito resolver:',
+  '',
+  'Quedo pendiente de su respuesta.',
+].join('\n');
+const EMAIL_LINK   = `mailto:${EMAIL}?subject=${encodeURIComponent(EMAIL_ASUNTO)}&body=${encodeURIComponent(EMAIL_CUERPO)}`;
 
 /* ─── Responsive context ─── */
 const MQ = createContext(false);
@@ -294,17 +358,24 @@ const Icon = ({ d, size=20, sw=1.75 }) => (
     strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" style={{ display:'block', flexShrink:0 }}>{d}</svg>
 );
 const ArrowRight  = ({ size=16 }) => <Icon size={size} d={<><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></>} />;
-const Filter      = ({ size=20, sw=1.75 }) => <Icon size={size} sw={sw} d={<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>} />;
 const Network     = ({ size=20, sw=1.75 }) => <Icon size={size} sw={sw} d={<><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><line x1="12" y1="12" x2="12" y2="8"/></>} />;
 const Search      = ({ size=20, sw=1.75 }) => <Icon size={size} sw={sw} d={<><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></>} />;
 const RefreshCw   = ({ size=20, sw=1.75 }) => <Icon size={size} sw={sw} d={<><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></>} />;
 const BarChart3   = ({ size=20, sw=1.75 }) => <Icon size={size} sw={sw} d={<><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></>} />;
-const ShieldCheck = ({ size=20, sw=1.75 }) => <Icon size={size} sw={sw} d={<><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></>} />;
+const Monitor     = ({ size=20, sw=1.75 }) => <Icon size={size} sw={sw} d={<><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></>} />;
+const Database    = ({ size=20, sw=1.75 }) => <Icon size={size} sw={sw} d={<><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></>} />;
+const Cog         = ({ size=20, sw=1.75 }) => <Icon size={size} sw={sw} d={<><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M19.1 4.9l-2.2 2.2M7.1 16.9l-2.2 2.2"/></>} />;
 const Mail        = ({ size=16 }) => <Icon size={size} d={<><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></>} />;
-const Phone       = ({ size=14 }) => <Icon size={size} d={<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.61 2.18h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L7.91 9.91a16 16 0 0 0 6.18 6.18l.99-.99a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7a2 2 0 0 1 1.73 2.03z"/>} />;
+const Instagram   = ({ size=20, sw=1.75 }) => <Icon size={size} sw={sw} d={<><rect x="2" y="2" width="20" height="20" rx="5.5"/><circle cx="12" cy="12" r="4.2"/><circle cx="17.6" cy="6.4" r="1" fill="currentColor" stroke="none"/></>} />;
 const MapPin      = ({ size=14 }) => <Icon size={size} d={<><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></>} />;
 const MenuIcon    = ({ size=22 }) => <Icon size={size} sw={2} d={<><line x1="3" y1="6"  x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></>} />;
 const X           = ({ size=20 }) => <Icon size={size} sw={2} d={<><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>} />;
+const WhatsApp    = ({ size=20 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" style={{ display:'block', flexShrink:0 }}>
+    <path d="M17.47 14.38c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.94 1.17-.17.2-.35.22-.64.07-.3-.15-1.28-.47-2.44-1.5-.9-.8-1.5-1.8-1.68-2.1-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.68-1.63-.93-2.22-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.79.37-.27.3-1.03 1-1.03 2.45s1.06 2.84 1.2 3.04c.15.2 2.08 3.32 5.05 4.53 2.47 1 2.97.8 3.51.75.54-.05 1.73-.71 1.98-1.4.25-.68.25-1.27.17-1.39-.07-.12-.27-.2-.57-.35z"/>
+    <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.46 1.32 4.96L2 22l5.25-1.38a9.87 9.87 0 0 0 4.79 1.22h.01c5.46 0 9.91-4.45 9.91-9.91C21.96 6.45 17.5 2 12.04 2zm0 18.13h-.01c-1.55 0-3.07-.42-4.4-1.2l-.32-.19-3.27.86.87-3.19-.2-.33a8.24 8.24 0 0 1-1.26-4.37c0-4.54 3.7-8.23 8.24-8.23a8.24 8.24 0 0 1 .01 16.47z"/>
+  </svg>
+);
 const Check       = ({ size=32 }) => <Icon size={size} sw={2.5} d={<><polyline points="20 6 9 17 4 12"/></>} />;
 
 /* ─── Section label ─── */
@@ -322,9 +393,11 @@ function SectionLabel({ children, light = false }) {
 ════════════════════════════════════════════════════════ */
 const TOTAL_PASOS = 5;
 const SERVICIOS_OPC = [
-  { id:'reclutamiento', label:'Reclutamiento y Selección' },
-  { id:'estudios',      label:'Estudios y Pruebas' },
-  { id:'panel',         label:'Panel de Inteligencia de Talento' },
+  { id:'presencia',     label:'Sitio web o presencia digital' },
+  { id:'administrativo',label:'Sistema administrativo' },
+  { id:'operativo',     label:'Sistema operativo' },
+  { id:'datos',         label:'Tableros, reportes y datos' },
+  { id:'nose',          label:'Sé el problema, no la solución' },
   { id:'pregunta',      label:'Solo tengo una pregunta' },
 ];
 
@@ -334,6 +407,7 @@ function FormModal({ onClose }) {
   const [form, setForm]       = useState({ nombre:'', empresa:'', email:'', telefono:'', servicio:'', mensaje:'' });
   const [enviando, setEnviando] = useState(false);
   const [enviado, setEnviado]  = useState(false);
+  const [fallo, setFallo]      = useState(false);
 
   const pct = Math.round((paso / TOTAL_PASOS) * 100);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -346,28 +420,115 @@ function FormModal({ onClose }) {
 
   const canContinue = () => {
     if (paso === 1) return form.nombre.trim().length > 1;
-    if (paso === 2) return form.empresa.trim().length > 1;
-    if (paso === 3) return /\S+@\S+\.\S+/.test(form.email) && form.telefono.trim().length > 5;
+    if (paso === 2) return true;   // opcional — se puede omitir
+    if (paso === 3) return RE_CORREO.test(limpiaCorreo(form.email))
+                        && form.telefono.replace(/\D/g, '').length >= 10;
     if (paso === 4) return form.servicio !== '';
     return true;
   };
 
   const siguiente = () => setPaso(p => p + 1);
   const anterior  = () => setPaso(p => p - 1);
-
-  const enviar = async () => {
-    setEnviando(true);
-    try {
-      fetch(APPS_SCRIPT_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ ...form, fecha: new Date().toLocaleString('es-MX') }),
-      });
-    } catch {}
-    await new Promise(r => setTimeout(r, 900));
-    setEnviado(true);
-    setEnviando(false);
+  /* Pasos que se pueden omitir → limpia el campo y avanza */
+  const OMITIBLES = { 2: 'empresa', 5: 'mensaje' };
+  const omitir    = () => {
+    const campo = OMITIBLES[paso];
+    set(campo, '');
+    if (paso === TOTAL_PASOS) enviar({ [campo]: '' });
+    else siguiente();
   };
+
+  /* Envío verificado: 'text/plain' evita el preflight de CORS, así que
+     podemos LEER la respuesta del Apps Script y saber si de verdad llegó.
+     Si falla, no perdemos el prospecto: le ofrecemos WhatsApp y correo
+     ya llenos con sus datos. */
+  const enviar = async (override = {}) => {
+    setEnviando(true);
+    setFallo(false);
+    const crudo = { ...form, ...override };
+    const datos = {
+      ...crudo,
+      nombre:  capitaliza(crudo.nombre),
+      empresa: capitaliza(crudo.empresa),
+      email:   limpiaCorreo(crudo.email),
+    };
+    setForm(datos);
+
+    let ok = false;
+    try {
+      const ctrl = new AbortController();
+      const reloj = setTimeout(() => ctrl.abort(), 15000);
+      const res  = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ ...datos, fecha: new Date().toLocaleString('es-MX') }),
+        redirect: 'follow',
+        signal: ctrl.signal,
+      });
+      clearTimeout(reloj);
+      if (res.ok) {
+        const txt = await res.text();
+        try { ok = JSON.parse(txt).status === 'ok'; }
+        catch { ok = /\bok\b/i.test(txt); }   // por si responde texto plano
+      }
+    } catch (err) {
+      console.error('[METRIQA] falló el envío del formulario:', err);
+    }
+
+    setEnviando(false);
+    if (ok) setEnviado(true);
+    else    setFallo(true);
+  };
+
+  /* ── Fallo: el envío no se pudo confirmar ── */
+  if (fallo) {
+    const resumen = [
+      `Nombre: ${form.nombre}`,
+      form.empresa && `Empresa: ${form.empresa}`,
+      form.email   && `Correo: ${form.email}`,
+      form.servicio && `Me interesa: ${form.servicio}`,
+      form.mensaje && `Detalle: ${form.mensaje}`,
+    ].filter(Boolean).join('\n');
+    const waFallback = `https://wa.me/${WA_TEL.replace(/\D/g,'')}?text=` +
+      encodeURIComponent('Hola METRIQA, llené el formulario del sitio pero no se envió. Estos son mis datos:\n\n' + resumen);
+    const mailFallback = `mailto:${EMAIL}?subject=${encodeURIComponent('Solicitud de diagnóstico (el formulario del sitio falló)')}` +
+      `&body=${encodeURIComponent('Hola METRIQA,\n\nLlené el formulario del sitio pero no se envió. Estos son mis datos:\n\n' + resumen)}`;
+
+    return (
+      <Overlay onClose={onClose}>
+        <div style={{ textAlign:'center', padding:'44px 36px' }}>
+          <div style={{ width:72, height:72, borderRadius:'50%', background:'rgba(189,135,207,0.15)',
+            display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 22px',
+            color:B.violetDeep, ...sora, fontSize:34, fontWeight:700 }}>!</div>
+          <h3 style={{ ...sora, fontSize:25, fontWeight:700, color:B.graphite, lineHeight:1.2 }}>
+            No pudimos enviar tu mensaje
+          </h3>
+          <p style={{ marginTop:12, fontSize:15, color:B.gray, lineHeight:1.65, maxWidth:380, margin:'12px auto 0' }}>
+            Algo falló de nuestro lado, no tuyo. Escríbenos directo y ya llevamos tus datos cargados
+            — no tienes que volver a escribirlos.
+          </p>
+          <a href={waFallback} target="_blank" rel="noopener noreferrer"
+            style={{ ...sora, display:'flex', alignItems:'center', justifyContent:'center', gap:10,
+              marginTop:28, padding:'15px', borderRadius:12, background:'#25D366', color:'#0B2E1A',
+              fontSize:15, fontWeight:700 }}>
+            <WhatsApp size={20} /> Enviar por WhatsApp
+          </a>
+          <a href={mailFallback}
+            style={{ ...sora, display:'flex', alignItems:'center', justifyContent:'center', gap:10,
+              marginTop:10, padding:'15px', borderRadius:12, border:`2px solid ${B.violetDeep}`,
+              color:B.violetDeep, fontSize:15, fontWeight:600 }}>
+            <Mail size={18} /> Enviar por correo
+          </a>
+          <button onClick={() => enviar()} disabled={enviando}
+            style={{ ...mono, marginTop:18, background:'none', border:'none', fontSize:11,
+              letterSpacing:'0.14em', color:B.gray, cursor: enviando ? 'wait' : 'pointer',
+              textDecoration:'underline', textUnderlineOffset:3 }}>
+            {enviando ? 'REINTENTANDO...' : 'REINTENTAR EL ENVÍO'}
+          </button>
+        </div>
+      </Overlay>
+    );
+  }
 
   /* ── Éxito ── */
   if (enviado) return (
@@ -394,35 +555,73 @@ function FormModal({ onClose }) {
   );
 
   /* ── Pasos ── */
+  /* El foco se pone a mano: el atributo autoFocus falla en Safari cuando el
+     campo se monta dentro de un contenedor con backdrop-filter */
+  const campoRef = useRef(null);
+  useEffect(() => {
+    const t = setTimeout(() => { if (campoRef.current) campoRef.current.focus(); }, 60);
+    return () => clearTimeout(t);
+  }, [paso]);
+
+  /* Avisos en vivo del paso 3 — solo cuando ya escribio algo, para no
+     regañar a alguien que apenas empieza a teclear */
+  const digitosTel  = form.telefono.replace(/\D/g, '').length;
+  const correoMal   = form.email.length > 4 && !RE_CORREO.test(limpiaCorreo(form.email));
+  const sugerencia  = sugiereCorreo(form.email);
+  const telMal      = digitosTel > 0 && digitosTel < 10;
+
   const renderPaso = () => {
     if (paso === 1) return (
       <Paso pregunta="¿Cuál es tu nombre?" sub="Queremos saber quién eres">
-        <input className="mq-field" type="text" placeholder="Tu nombre completo"
+        <input ref={campoRef} className="mq-field" type="text" placeholder="Tu nombre completo"
           value={form.nombre} onChange={e => set('nombre', e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && canContinue() && siguiente()}
-          autoFocus />
-      </Paso>
-    );
-    if (paso === 2) return (
-      <Paso pregunta="¿En qué empresa trabajas?" sub="Dinos el nombre de tu organización">
-        <input className="mq-field" type="text" placeholder="Nombre de tu empresa"
-          value={form.empresa} onChange={e => set('empresa', e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && canContinue() && siguiente()}
-          autoFocus />
-      </Paso>
-    );
-    if (paso === 3) return (
-      <Paso pregunta="¿Cómo podemos contactarte?" sub="Tu correo y teléfono">
-        <input className="mq-field" type="email" placeholder="correo@empresa.com"
-          value={form.email} onChange={e => set('email', e.target.value)} autoFocus />
-        <input className="mq-field" type="tel" placeholder="+52 81 0000 0000"
-          style={{ marginTop:12 }}
-          value={form.telefono} onChange={e => set('telefono', e.target.value)}
           onKeyDown={e => e.key === 'Enter' && canContinue() && siguiente()} />
       </Paso>
     );
+    if (paso === 2) return (
+      <Paso pregunta="¿En qué empresa trabajas?" sub="Opcional — puedes omitirlo si prefieres">
+        <input ref={campoRef} className="mq-field" type="text" placeholder="Nombre de tu empresa"
+          value={form.empresa} onChange={e => set('empresa', e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && canContinue() && siguiente()} />
+      </Paso>
+    );
+    if (paso === 3) return (
+      <Paso pregunta="¿Cómo podemos contactarte?" sub="Tu correo y tu WhatsApp">
+        <label style={{ ...mono, display:'block', marginBottom:7, fontSize:10,
+          letterSpacing:'0.18em', color:B.gray }}>CORREO</label>
+        <input ref={campoRef} className="mq-field" type="email" placeholder="tucorreo@ejemplo.com"
+          autoCapitalize="none" autoCorrect="off" spellCheck={false}
+          value={form.email} onChange={e => set('email', e.target.value)} />
+        {correoMal && (
+          <div style={{ ...sora, marginTop:8, fontSize:12.5, color:'#B0344A' }}>
+            Ese correo no se ve completo. Debe ser como <em>nombre@empresa.com</em>
+          </div>
+        )}
+        {sugerencia && (
+          <div style={{ ...sora, marginTop:8, fontSize:12.5, color:B.gray }}>
+            ¿Quisiste decir{' '}
+            <button type="button" onClick={() => set('email', sugerencia)}
+              style={{ ...sora, background:'none', border:'none', padding:0, cursor:'pointer',
+                color:B.violetDeep, fontWeight:600, fontSize:12.5, textDecoration:'underline' }}>
+              {sugerencia}
+            </button>?
+          </div>
+        )}
+
+        <label style={{ ...mono, display:'block', margin:'16px 0 7px', fontSize:10,
+          letterSpacing:'0.18em', color:B.gray }}>WHATSAPP</label>
+        <input className="mq-field" type="tel" placeholder="+52 55 0000 0000"
+          value={form.telefono} onChange={e => set('telefono', e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && canContinue() && siguiente()} />
+        {telMal && (
+          <div style={{ ...sora, marginTop:8, fontSize:12.5, color:'#B0344A' }}>
+            Faltan dígitos: necesitamos los 10 de tu WhatsApp ({digitosTel} de 10)
+          </div>
+        )}
+      </Paso>
+    );
     if (paso === 4) return (
-      <Paso pregunta="¿En qué podemos ayudarte?" sub="Selecciona el servicio de tu interés">
+      <Paso pregunta="¿Qué quieres construir?" sub="Elige lo más cercano — lo afinamos en la llamada">
         <div style={{ display:'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap:10, marginTop:4 }}>
           {SERVICIOS_OPC.map(s => (
             <button key={s.id} onClick={() => set('servicio', s.label)}
@@ -439,8 +638,9 @@ function FormModal({ onClose }) {
     );
     if (paso === 5) return (
       <Paso pregunta="¿Algo más que quieras contarnos?" sub="Cuéntanos sobre tu situación (opcional)">
-        <textarea className="mq-field" placeholder="Describe brevemente tu necesidad..."
-          value={form.mensaje} onChange={e => set('mensaje', e.target.value)} autoFocus />
+        <textarea ref={campoRef} className="mq-field" rows={4}
+          placeholder="Describe brevemente tu necesidad..."
+          value={form.mensaje} onChange={e => set('mensaje', e.target.value)} />
       </Paso>
     );
   };
@@ -476,6 +676,15 @@ function FormModal({ onClose }) {
             Atrás
           </button>
         )}
+        {OMITIBLES[paso] && (
+          <button onClick={omitir} disabled={enviando}
+            style={{ ...mono, gridColumn:'1 / -1', order:2, padding:'6px', background:'none',
+              border:'none', fontSize:11, letterSpacing:'0.14em', color:B.gray,
+              cursor: enviando ? 'not-allowed' : 'pointer', textDecoration:'underline',
+              textUnderlineOffset:3 }}>
+            OMITIR ESTE PASO →
+          </button>
+        )}
         {paso < TOTAL_PASOS ? (
           <button onClick={siguiente} disabled={!canContinue()}
             style={{ ...sora, padding:'14px', borderRadius:12, border:'none', fontSize:14,
@@ -485,7 +694,7 @@ function FormModal({ onClose }) {
             Continuar
           </button>
         ) : (
-          <button onClick={enviar} disabled={enviando}
+          <button onClick={() => enviar()} disabled={enviando}
             style={{ ...sora, padding:'14px', borderRadius:12, border:'none', fontSize:14,
               fontWeight:700, cursor: enviando ? 'not-allowed' : 'pointer',
               opacity: enviando ? 0.7 : 1, color:'#fff',
@@ -519,7 +728,9 @@ function Overlay({ onClose, children }) {
         background:'#fff',
         borderRadius: isMobile ? '20px 20px 0 0' : 20,
         boxShadow:'0 32px 80px rgba(0,0,0,0.3)',
-        overflow:'hidden' }}>
+        maxHeight: isMobile ? '92vh' : '90vh',
+        overflowY:'auto', overflowX:'hidden',
+        WebkitOverflowScrolling:'touch' }}>
         {children}
       </div>
     </div>
@@ -543,7 +754,7 @@ function Paso({ pregunta, sub, children }) {
 function Hero({ onOpenForm }) {
   const isMobile = useMobile();
   const [menuOpen, setMenuOpen] = useState(false);
-  const navLinks = [['#esencia','ESENCIA'],['#servicios','SERVICIOS'],['#panel','PANEL'],['#contacto','CONTACTO']];
+  const navLinks = [['#esencia','ESENCIA'],['#servicios','SISTEMAS'],['#panel','PANEL'],['#contacto','CONTACTO']];
   const threeRef = useRef(null);
 
   useEffect(() => {
@@ -629,26 +840,27 @@ function Hero({ onOpenForm }) {
       {/* Hero content */}
       <div style={{ position:'relative', zIndex:1, maxWidth:1152, margin:'0 auto',
         padding: isMobile ? '110px 24px 80px' : '160px 24px 128px' }}>
-        <div style={{ maxWidth:720 }}>
+        <div style={{ maxWidth:880 }}>
           <div style={{ ...mono, display:'flex', alignItems:'center', gap:12,
             marginBottom: isMobile ? 20 : 32,
             fontSize:11, color:'rgba(255,255,255,0.55)', letterSpacing:'0.22em' }}>
             <span style={{ display:'inline-block', width:32, height:1, background:'rgba(255,255,255,0.35)' }} />
-            CAPITAL HUMANO · DATA · IA
+            INVESTIGAR · PLANEAR · EJECUTAR
           </div>
 
-          <h1 style={{ ...sora, color:'#fff', fontSize:'clamp(2.5rem,6vw,4.75rem)', lineHeight:1.05,
+          <h1 style={{ ...sora, color:'#fff', fontSize:'clamp(1.9rem,4.4vw,3.3rem)', lineHeight:1.08,
             letterSpacing:'-0.02em', fontWeight:700 }}>
-            El punto exacto<br />
-            entre{' '}<em style={{ color:B.violet, fontStyle:'normal' }}>criterio</em>
-            {' '}y{' '}<em style={{ color:B.violet, fontStyle:'normal' }}>dato</em>.
+            Tú haz{' '}<em style={{ color:B.violet, fontStyle:'normal' }}>crecer</em>{' '}el negocio.<br />
+            Nosotros{' '}<em style={{ color:B.violet, fontStyle:'normal' }}>construimos</em>{' '}el sistema.
           </h1>
 
           <p style={{ ...sora, marginTop: isMobile ? 20 : 32, fontSize:'clamp(1rem,2vw,1.15rem)',
-            color:'rgba(255,255,255,0.80)', maxWidth:520, lineHeight:1.65 }}>
-            METRIQA es la consultoría administrativa B2B que{' '}
-            <strong style={{ color:'#fff', fontWeight:600 }}>diagnostica, ejecuta y mide</strong>{' '}
-            el capital humano de empresas medianas. Resultados medibles, no suposiciones.
+            color:'rgba(255,255,255,0.80)', maxWidth:560, lineHeight:1.65 }}>
+            METRIQA construye{' '}
+            <strong style={{ color:'#fff', fontWeight:600 }}>sistemas a la medida</strong>{' '}
+            — sitios web, sistemas administrativos, sistemas operativos y software propio —
+            para empresas que ya no caben en Excel. Investigamos, planeamos, diseñamos la
+            estrategia y ejecutamos.
           </p>
 
           <div style={{ marginTop: isMobile ? 28 : 40, display:'flex', flexWrap:'wrap', gap:16 }}>
@@ -660,20 +872,8 @@ function Hero({ onOpenForm }) {
             <a href="#servicios" style={{ ...sora, display:'inline-flex', alignItems:'center', gap:8,
               borderRadius:999, padding:'14px 28px', fontSize:14, fontWeight:500,
               color:'#fff', border:'1px solid rgba(255,255,255,0.25)' }}>
-              Ver servicios
+              Ver lo que construimos
             </a>
-          </div>
-
-          <div style={{ marginTop: isMobile ? 40 : 64, display:'grid',
-            gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)',
-            borderRadius:16, overflow:'hidden', border:'1px solid rgba(255,255,255,0.10)',
-            background:'rgba(255,255,255,0.06)' }}>
-            {[{k:'100%',l:'MÉTRICAS EN TIEMPO REAL'},{k:'5',l:'ÁREAS DE IMPACTO'},{k:'1',l:'PANEL UNIFICADO'},{k:'MTY',l:'MÉXICO'}].map(m=>(
-              <div key={m.l} style={{ padding:20, background:'rgba(1,11,36,0.45)' }}>
-                <div style={{ ...mono, fontSize: isMobile ? 22 : 28, fontWeight:500, color:'#fff' }}>{m.k}</div>
-                <div style={{ ...mono, marginTop:4, fontSize:10, letterSpacing:'0.22em', color:'rgba(255,255,255,0.50)' }}>{m.l}</div>
-              </div>
-            ))}
           </div>
         </div>
       </div>
@@ -682,7 +882,7 @@ function Hero({ onOpenForm }) {
         <div style={{ ...mono, maxWidth:1152, margin:'0 auto', padding:'16px 24px',
           display:'flex', justifyContent:'space-between', fontSize:11,
           letterSpacing:'0.2em', color:'rgba(255,255,255,0.40)' }}>
-          <span>DIAGNOSTICAR · EJECUTAR · MEDIR</span>
+          <span>SITIOS · SISTEMAS · SOFTWARE A LA MEDIDA</span>
           <span>v1.0 — MTY, MX</span>
         </div>
       </div>
@@ -696,7 +896,7 @@ function Hero({ onOpenForm }) {
 const atributos = [
   { n:'01', t:'Precisa / analítica',       d:'Cada recomendación se sostiene en datos. Hablamos en métricas, no en suposiciones.' },
   { n:'02', t:'Confiable / institucional', d:'Rigor, cumplimiento y consistencia. Una marca con la que los comités se sienten seguros.' },
-  { n:'03', t:'Cercana / humana',          d:'Detrás de cada tablero hay personas. Acompañamos, traducimos y ejecutamos a tu lado.' },
+  { n:'03', t:'Cercana / humana',          d:'Detrás de cada sistema hay personas que lo van a usar todos los días. Diseñamos para ellas.' },
 ];
 
 function Esencia() {
@@ -706,11 +906,17 @@ function Esencia() {
     <section id="esencia" style={{ padding: isMobile ? '72px 0' : '112px 0', background:B.paper }}>
       <div style={{ maxWidth:1152, margin:'0 auto', padding:'0 24px' }}>
         <SectionLabel>ESENCIA · 01</SectionLabel>
-        <h2 style={{ ...sora, marginTop:16, maxWidth:760, fontWeight:700, color:B.graphite,
+        <h2 style={{ ...sora, marginTop:16, maxWidth:820, fontWeight:700, color:B.graphite,
           fontSize:'clamp(2rem,4vw,3rem)', lineHeight:1.1, letterSpacing:'-0.02em' }}>
-          No somos una agencia de reclutamiento ni un software de RH.<br />
-          <span style={{ color:B.violetDeep }}>Somos el socio operativo</span> que entrega resultados medibles.
+          Hacemos <span style={{ color:B.violetDeep }}>desarrollo digital</span>.
         </h2>
+        <p style={{ ...sora, marginTop:24, maxWidth:720, fontSize:'clamp(1rem,2vw,1.15rem)',
+          color:B.gray, lineHeight:1.7 }}>
+          El uso de tecnologías de la información y la comunicación como herramienta para{' '}
+          <strong style={{ color:B.graphite, fontWeight:600 }}>mejorar la calidad de vida de las personas</strong>,{' '}
+          <strong style={{ color:B.graphite, fontWeight:600 }}>elevar la eficiencia</strong> y{' '}
+          <strong style={{ color:B.graphite, fontWeight:600 }}>aumentar la productividad de las empresas</strong>.
+        </p>
         <div style={{ marginTop: isMobile ? 40 : 64, display:'grid',
           gridTemplateColumns: isMobile ? '1fr' : 'repeat(3,1fr)', gap:20 }}>
           {atributos.map(a => (
@@ -751,15 +957,18 @@ function Esencia() {
    SERVICIOS (flip cards)
 ════════════════════════════════════════ */
 const servicios = [
-  { n:'01', Icon:Filter,      t:'Reclutamiento y Selección',  tag:'PERFIL · CULTURA · AJUSTE',
-    d:'Encontramos, atraemos, evaluamos y colocamos al talento idóneo para cada posición.',
-    bullets:['Reclutamiento administrativo','Reclutamiento operativo / masivo','Evaluaciones de perfil y cultura'] },
-  { n:'02', Icon:ShieldCheck, t:'Estudios y Pruebas',         tag:'CONFIABILIDAD · RIESGO · AJUSTE',
-    d:'Validamos confiabilidad, antecedentes y perfil antes de la contratación.',
-    bullets:['Investigación laboral · IMSS','Estudio socioeconómico','Psicométricas · honestidad'] },
-  { n:'03', Icon:BarChart3,   t:'Panel de Inteligencia de Talento', tag:'DATOS DISPERSOS → DECISIONES',
-    d:'Convertimos los datos dispersos de tu fuerza laboral en decisiones claras.',
-    bullets:['Reclutamiento · Rotación','Headcount · Antigüedad','KPIs accionables para dirección'] },
+  { n:'01', Icon:Monitor,  t:'Presencia digital',        tag:'LO QUE TU CLIENTE VE PRIMERO',
+    d:'Lo que tu cliente ve antes de decidir si te compra. Rápido, claro y hecho para vender.',
+    bullets:['Sitios web y landing pages','Catálogos de producto o servicio','Agenda de citas en línea'] },
+  { n:'02', Icon:Database, t:'Sistemas administrativos', tag:'ORDEN ADENTRO DE LA EMPRESA',
+    d:'Reemplazamos las hojas de cálculo repartidas entre personas por un solo lugar confiable.',
+    bullets:['Clientes, cotizaciones y facturación','Inventario y expedientes','Compras, proveedores y gastos'] },
+  { n:'03', Icon:Cog,      t:'Sistemas operativos',      tag:'LO QUE MUEVE EL NEGOCIO A DIARIO',
+    d:'El sistema se adapta a tu proceso, no tu proceso al sistema. Diseñado para quien lo usa de pie.',
+    bullets:['Órdenes de trabajo y rutas','Producción, turnos y control de piso','Uso desde celular o tablet'] },
+  { n:'04', Icon:BarChart3, t:'Datos y decisión',        tag:'DATOS DISPERSOS → DECISIONES',
+    d:'El sistema no solo guarda información: te avisa cuando algo se sale de rango.',
+    bullets:['Tableros e indicadores en vivo','Reportes automáticos en PDF','Alertas inteligentes'] },
 ];
 
 function Servicios() {
@@ -770,51 +979,52 @@ function Servicios() {
       <div style={{ maxWidth:1152, margin:'0 auto', padding:'0 24px' }}>
         <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', flexWrap:'wrap', gap:24 }}>
           <div>
-            <SectionLabel>SERVICIOS · 02</SectionLabel>
+            <SectionLabel>QUÉ CONSTRUIMOS · 02</SectionLabel>
             <h2 style={{ ...sora, marginTop:16, fontWeight:700, color:B.graphite,
               fontSize:'clamp(2rem,4vw,3rem)', lineHeight:1.1, letterSpacing:'-0.02em' }}>
-              Un solo socio,<br />tres frentes de impacto.
+              Un solo aliado,<br />cuatro pilares.
             </h2>
           </div>
-          <p style={{ maxWidth:360, fontSize:15, color:B.gray, lineHeight:1.65 }}>
-            De la búsqueda al tablero. Cada servicio se conecta con el siguiente para sostener tu operación de capital humano.
+          <p style={{ maxWidth:380, fontSize:15, color:B.gray, lineHeight:1.65 }}>
+            En el orden en que lo vives: primero cómo te ven por fuera, luego cómo te ordenas
+            por dentro, después cómo operas — y al final, cómo decides.
           </p>
         </div>
         <div style={{ marginTop: isMobile ? 40 : 64, display:'grid',
-          gridTemplateColumns: isMobile ? '1fr' : 'repeat(3,1fr)', gap:20 }}>
+          gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit,minmax(250px,1fr))', gap:20 }}>
           {servicios.map(s => (
-            <FlipCard key={s.n} height={isMobile ? 280 : 320}
+            <FlipCard key={s.n} height={isMobile ? 280 : 330}
               front={
                 <div style={{ width:'100%', height:'100%', borderRadius:20, border:`1px solid ${B.line}`,
-                  background:B.paper, padding:32, display:'flex', flexDirection:'column', justifyContent:'space-between' }}>
+                  background:B.paper, padding:28, display:'flex', flexDirection:'column', justifyContent:'space-between' }}>
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                    <span style={{ ...mono, fontSize:11, letterSpacing:'0.22em', color:B.gray }}>SERVICIO · {s.n}</span>
+                    <span style={{ ...mono, fontSize:11, letterSpacing:'0.18em', color:B.gray }}>PILAR · {s.n}</span>
                     <div style={{ width:42, height:42, borderRadius:12, display:'flex', alignItems:'center',
                       justifyContent:'center', background:B.violet10, color:B.violetDeep }}>
                       <s.Icon size={20} sw={1.75} />
                     </div>
                   </div>
-                  <h3 style={{ ...sora, fontSize:22, fontWeight:700, color:B.graphite, lineHeight:1.2 }}>{s.t}</h3>
+                  <h3 style={{ ...sora, fontSize:20, fontWeight:700, color:B.graphite, lineHeight:1.2, letterSpacing:'-0.01em' }}>{s.t}</h3>
                   <div>
-                    <div style={{ ...mono, fontSize:10.5, letterSpacing:'0.18em', color:B.gray, paddingTop:20, borderTop:`1px solid ${B.line}` }}>◆ {s.tag}</div>
+                    <div style={{ ...mono, fontSize:10, letterSpacing:'0.14em', color:B.gray, paddingTop:18, borderTop:`1px solid ${B.line}`, lineHeight:1.5 }}>◆ {s.tag}</div>
                     <div style={{ ...mono, marginTop:10, fontSize:10, letterSpacing:'0.18em', color:B.violet, opacity:0.7 }}>{hint}</div>
                   </div>
                 </div>
               }
               back={
-                <div style={{ width:'100%', height:'100%', borderRadius:20, background:B.navy, padding:32,
+                <div style={{ width:'100%', height:'100%', borderRadius:20, background:B.navy, padding:28,
                   display:'flex', flexDirection:'column', justifyContent:'space-between' }}>
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                    <span style={{ ...mono, fontSize:11, letterSpacing:'0.22em', color:'rgba(255,255,255,0.45)' }}>SERVICIO · {s.n}</span>
+                    <span style={{ ...mono, fontSize:11, letterSpacing:'0.18em', color:'rgba(255,255,255,0.45)' }}>PILAR · {s.n}</span>
                     <div style={{ width:42, height:42, borderRadius:12, display:'flex', alignItems:'center',
                       justifyContent:'center', background:'rgba(189,135,207,0.15)', color:B.violet }}>
                       <s.Icon size={20} sw={1.75} />
                     </div>
                   </div>
-                  <p style={{ ...sora, fontSize:14, color:'rgba(255,255,255,0.80)', lineHeight:1.65 }}>{s.d}</p>
-                  <ul style={{ display:'flex', flexDirection:'column', gap:10 }}>
+                  <p style={{ ...sora, fontSize:13.5, color:'rgba(255,255,255,0.80)', lineHeight:1.6 }}>{s.d}</p>
+                  <ul style={{ display:'flex', flexDirection:'column', gap:9 }}>
                     {s.bullets.map(b => (
-                      <li key={b} style={{ display:'flex', alignItems:'flex-start', gap:10, fontSize:13, color:'#fff' }}>
+                      <li key={b} style={{ display:'flex', alignItems:'flex-start', gap:10, fontSize:12.5, lineHeight:1.45, color:'#fff' }}>
                         <span style={{ marginTop:6, width:6, height:6, flexShrink:0, background:B.violet, display:'inline-block' }} />{b}
                       </li>
                     ))}
@@ -834,11 +1044,11 @@ function Servicios() {
    DIFERENCIADOR
 ════════════════════════════════════════ */
 const areas = [
-  { Icon:Filter,    t:'Reclutamiento operativo',  d:'Volumen, rapidez y menor rotación.' },
-  { Icon:Network,   t:'Headcount administrativo', d:'Estructura, costos, duplicidades.' },
-  { Icon:Search,    t:'Investigación laboral',    d:'IMSS, antecedentes, referencias.' },
-  { Icon:RefreshCw, t:'Rotación y retención',     d:'Análisis de causas y permanencia.' },
-  { Icon:BarChart3, t:'Métricas y tableros',      d:'Indicadores de RH accionables.' },
+  { Icon:Search,    t:'Investigamos', d:'Vemos tu operación real antes de proponer nada.' },
+  { Icon:Network,   t:'Planeamos',    d:'Alcance, prioridades y una ruta clara.' },
+  { Icon:Cog,       t:'Construimos',  d:'Software propio, no plantillas ajustadas.' },
+  { Icon:BarChart3, t:'Medimos',      d:'Indicadores en vivo desde el primer día.' },
+  { Icon:RefreshCw, t:'Evolucionamos',d:'El sistema crece al ritmo del negocio.' },
 ];
 
 function Diferenciador() {
@@ -852,16 +1062,16 @@ function Diferenciador() {
         opacity:0.25, filter:'blur(80px)', pointerEvents:'none',
         background:`radial-gradient(circle, ${B.periwinkle}, transparent 70%)` }} />
       <div style={{ position:'relative', maxWidth:1152, margin:'0 auto', padding:'0 24px' }}>
-        <SectionLabel light>EL DIFERENCIADOR · 03</SectionLabel>
+        <SectionLabel light>CÓMO TRABAJAMOS · 03</SectionLabel>
         <div style={{ marginTop:16, display:'grid',
           gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
           gap: isMobile ? 16 : 48, alignItems:'flex-end' }}>
           <h2 style={{ ...sora, fontWeight:700, color:'#fff', fontSize:'clamp(2rem,4vw,3rem)', lineHeight:1.1, letterSpacing:'-0.02em' }}>
-            Cinco áreas de impacto.<br />
+            Cinco pasos.<br />
             <span style={{ color:B.violet }}>Criterio consultivo</span> + <span style={{ color:B.violet }}>IA</span>.
           </h2>
           <p style={{ fontSize:15, color:'rgba(255,255,255,0.65)', maxWidth:400, lineHeight:1.65 }}>
-            Combinamos rigor humano con herramientas de IA para entregar más rápido y con mayor precisión que cualquier competidor local.
+            Combinamos criterio humano con herramientas de IA para entregar más rápido y con más precisión. No vendemos horas: entregamos sistemas que funcionan.
           </p>
         </div>
         <div style={{ marginTop: isMobile ? 40 : 64, display:'grid',
@@ -922,7 +1132,7 @@ function MacBook({ progress }) {
         }}>
           <img
             src="dashboard-screenshot.png"
-            alt="Metriqa Dashboard"
+            alt="Panel de control METRIQA"
             style={{
               width: '100%', height: '100%',
               objectFit: 'cover',
@@ -998,15 +1208,15 @@ function Panel() {
         gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
         gap: isMobile ? 40 : 64, alignItems:'center' }}>
         <div>
-          <SectionLabel>PANEL DE INTELIGENCIA · 04</SectionLabel>
+          <SectionLabel>EL PANEL · 04</SectionLabel>
           <h2 style={{ ...sora, marginTop:16, fontWeight:700, color:B.graphite, fontSize:'clamp(2rem,4vw,2.75rem)', lineHeight:1.1, letterSpacing:'-0.02em' }}>
             Datos dispersos,<br /><span style={{ color:B.violetDeep }}>decisiones claras.</span>
           </h2>
           <p style={{ marginTop:24, fontSize:16, lineHeight:1.65, color:B.gray }}>
-            Un panel de inteligencia de talento para directores de RH y líderes que necesitan transformar la información de su fuerza laboral en decisiones.
+            Cada sistema que construimos incluye su propio panel: los indicadores de tu operación en un solo lugar, actualizados, listos para decidir sin pedirle un reporte a nadie.
           </p>
           <ul style={{ marginTop:32, display:'flex', flexDirection:'column', gap:12 }}>
-            {['Todos tus indicadores en un solo lugar','Diseñado para comités y dirección','De la dispersión al criterio accionable'].map(t=>(
+            {['Todos tus indicadores en un solo lugar','Diseñado para dirección y consejo','De la dispersión al criterio accionable'].map(t=>(
               <li key={t} style={{ display:'flex', alignItems:'flex-start', gap:12, fontSize:15, color:B.graphite }}>
                 <span style={{ marginTop:8, width:8, height:8, flexShrink:0, background:B.violet, display:'inline-block' }} />{t}
               </li>
@@ -1054,35 +1264,42 @@ function Contacto({ onOpenForm }) {
           <SectionLabel light>CONTACTO · 05</SectionLabel>
           <h2 style={{ ...sora, marginTop:16, fontWeight:700, color:'#fff',
             fontSize:'clamp(2rem,4vw,3rem)', lineHeight:1.1, letterSpacing:'-0.02em' }}>
-            Hablemos de tu<br /><span style={{ color:B.violet }}>próxima contratación.</span>
+            Hablemos de tu<br /><span style={{ color:B.violet }}>próximo sistema.</span>
           </h2>
           <p style={{ marginTop:20, color:'rgba(255,255,255,0.70)', fontSize:15, lineHeight:1.65 }}>
-            Diagnóstico inicial sin costo. Una conversación de 30 minutos para entender tu operación y proponer el siguiente paso medible.
+            Diagnóstico inicial sin costo. Una conversación de 30 minutos para entender tu operación y proponer el siguiente paso concreto.
           </p>
 
-          <div style={{ marginTop:36, display:'flex', flexDirection:'column', gap:14 }}>
-            {[{rol:'FUNDADORA',n:'Alejandra Cerecedo P.',tel:'+52 81 2080 1630'},
-              {rol:'FUNDADOR', n:'Maximiliano Ramón',    tel:'+52 81 1820 6150'}].map(p=>(
-              <div key={p.n} style={{ display:'flex', alignItems:'center', gap:16,
-                borderRadius:14, border:'1px solid rgba(255,255,255,0.12)',
-                padding:'16px 20px', background:'rgba(255,255,255,0.06)' }}>
-                <div>
-                  <div style={{ ...mono, fontSize:10, letterSpacing:'0.2em', color:'rgba(255,255,255,0.50)' }}>{p.rol}</div>
-                  <div style={{ ...sora, marginTop:4, color:'#fff', fontWeight:600, fontSize:14 }}>{p.n}</div>
-                  <a href={`tel:${p.tel.replace(/\s/g,'')}`}
-                    style={{ ...mono, marginTop:3, display:'flex', alignItems:'center', gap:7, color:'rgba(255,255,255,0.60)', fontSize:12 }}>
-                    <Phone size={12} /> {p.tel}
-                  </a>
-                </div>
-              </div>
-            ))}
-          </div>
+          <a href={WA_LINK} target="_blank" rel="noopener noreferrer"
+            style={{ ...sora, marginTop:36, display:'inline-flex', alignItems:'center', gap:14,
+              borderRadius:16, padding:'18px 26px', background:'#25D366', color:'#0B2E1A',
+              boxShadow:'0 12px 40px -10px rgba(37,211,102,0.55)', transition:'transform .15s' }}
+            onMouseOver={e => e.currentTarget.style.transform='translateY(-2px)'}
+            onMouseOut={e => e.currentTarget.style.transform='translateY(0)'}>
+            <WhatsApp size={28} />
+            <span>
+              <span style={{ ...mono, display:'block', fontSize:10, letterSpacing:'0.2em', opacity:0.7 }}>
+                ESCRÍBENOS POR WHATSAPP
+              </span>
+              <span style={{ display:'block', marginTop:3, fontSize:16, fontWeight:700 }}>
+                {WA_TEL}
+              </span>
+            </span>
+          </a>
 
           <div style={{ marginTop:24, display:'flex', alignItems:'center', gap:14, flexWrap:'wrap' }}>
-            <a href="mailto:contacto@metriqa.com.mx"
+            <a href={EMAIL_LINK}
               style={{ ...sora, display:'inline-flex', alignItems:'center', gap:8, fontSize:13,
                 color:'rgba(255,255,255,0.70)', borderBottom:'1px solid rgba(255,255,255,0.25)', paddingBottom:2 }}>
-              <Mail size={14} /> contacto@metriqa.com.mx
+              <Mail size={14} /> {EMAIL}
+            </a>
+            <a href={IG_LINK} target="_blank" rel="noopener noreferrer" aria-label="Instagram de METRIQA"
+              style={{ ...sora, display:'inline-flex', alignItems:'center', gap:8, fontSize:13,
+                color:'rgba(255,255,255,0.70)', borderBottom:'1px solid rgba(255,255,255,0.25)',
+                paddingBottom:2, transition:'color .15s' }}
+              onMouseOver={e => e.currentTarget.style.color='#fff'}
+              onMouseOut={e => e.currentTarget.style.color='rgba(255,255,255,0.70)'}>
+              <Instagram size={15} sw={1.6} /> @{IG_USER}
             </a>
             <span style={{ ...mono, display:'flex', alignItems:'center', gap:6, color:'rgba(255,255,255,0.45)', fontSize:12 }}>
               <MapPin size={12} /> Monterrey, México
@@ -1126,9 +1343,21 @@ function Footer() {
         flexDirection: isMobile ? 'column' : 'row',
         alignItems: isMobile ? 'flex-start' : 'center',
         justifyContent:'space-between', flexWrap:'wrap', gap:24 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:14 }}>
-          <Isotype size={24} coreColor={B.violet} axisColor="#fff" />
-          <Wordmark color="#fff" size={16} />
+        <div style={{ display:'flex', alignItems:'center', gap:20 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+            <Isotype size={24} coreColor={B.violet} axisColor="#fff" />
+            <Wordmark color="#fff" size={16} />
+          </div>
+          <a href={IG_LINK} target="_blank" rel="noopener noreferrer" aria-label="Instagram de METRIQA"
+            style={{ display:'flex', alignItems:'center', justifyContent:'center',
+              width:36, height:36, borderRadius:10, color:'rgba(255,255,255,0.65)',
+              border:'1px solid rgba(255,255,255,0.15)', transition:'all .15s' }}
+            onMouseOver={e => { e.currentTarget.style.color=B.violet;
+                                e.currentTarget.style.borderColor='rgba(189,135,207,0.5)'; }}
+            onMouseOut={e => { e.currentTarget.style.color='rgba(255,255,255,0.65)';
+                               e.currentTarget.style.borderColor='rgba(255,255,255,0.15)'; }}>
+            <Instagram size={18} sw={1.7} />
+          </a>
         </div>
         <div style={{ ...mono, fontSize:11, letterSpacing:'0.22em', color:'rgba(255,255,255,0.40)' }}>
           EL PUNTO EXACTO ENTRE CRITERIO Y DATO
